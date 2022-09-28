@@ -31,6 +31,32 @@ class StableDiffusioNTest(tf.test.TestCase):
         stablediff = StableDiffusion(128, 128)
         _ = stablediff.text_to_image("Testing123 haha!")
 
+    def test_add_tokens(self):
+        stablediff = StableDiffusion(128, 128)
+        old_token_weights = (
+            stablediff.text_encoder.embedding.token_embedding.get_weights()
+        )
+        old_position_weights = (
+            stablediff.text_encoder.embedding.position_embedding.get_weights()
+        )
+        self.assertEqual(len(old_token_weights), 1)
+        self.assertEqual(len(old_position_weights), 1)
+
+        stablediff.add_tokens("<my-silly-cat-token>")
+        new_token_weights = (
+            stablediff.text_encoder.embedding.token_embedding.get_weights()
+        )
+
+        self.assertEqual(len(new_token_weights), 1)
+        self.assertAllEqual(old_token_weights[0][:49408], new_token_weights[0][:49408])
+        self.assertEqual(len(new_token_weights[0]), 49409)
+
+        stablediff.add_tokens("<keras-token>")
+        new_token_weights = (
+            stablediff.text_encoder.embedding.token_embedding.get_weights()
+        )
+        self.assertEqual(len(new_token_weights[0]), 49410)
+
 
 if __name__ == "__main__":
     tf.test.main()

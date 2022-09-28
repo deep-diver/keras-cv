@@ -89,6 +89,7 @@ class StableDiffusion:
         self.text_encoder = TextEncoder(MAX_PROMPT_LENGTH)
         self.diffusion_model = DiffusionModel(img_height, img_width, MAX_PROMPT_LENGTH)
         self.decoder = Decoder(img_height, img_width)
+        self.jit_compile = jit_compile
         if jit_compile:
             self.text_encoder.compile(jit_compile=True)
             self.diffusion_model.compile(jit_compile=True)
@@ -111,6 +112,35 @@ class StableDiffusion:
         self.diffusion_model.load_weights(diffusion_model_weights_fpath)
         self.decoder.load_weights(decoder_weights_fpath)
 
+    def add_tokens(self, tokens):
+        added_tokens = self.tokenizer.add_tokens(tokens)
+        new_vocab_size = self.text_encoder.vocab_size + added_tokens
+
+        old_token_weights = self.text_encoder.embedding.token_embedding.get_weights()
+        old_position_weights = (
+            self.text_encoder.embedding.position_embedding.get_weights()
+        )
+        if len(old_token_weights) > 1:
+            # this should never happen, but we should warn users if something unexpected
+            # changes upstream.
+            raise ValueError("Invalid old_token_weights or old_position_weights")
+
+        old_token_weights = old_token_weights[0]
+        new_weights = np.mean(old_token_weights, axis=0)
+        new_weights = np.expand_dims(new_weights, axis=0)
+        new_weights = np.repeat(new_weights, added_tokens, axis=0)
+        new_weights = np.concatenate([old_token_weights, new_weights], axis=0)
+
+        new_vocab_size = self.text_encoder.vocab_size + added_tokens
+        new_encoder = TextEncoder(MAX_PROMPT_LENGTH, vocab_size=new_vocab_size)
+
+        new_encoder.embedding.token_embedding.set_weights([new_weights])
+        new_encoder.embedding.position_embedding.set_weights(old_position_weights)
+        self.text_encoder = new_encoder
+
+        if self.jit_compile:
+            self.text_encoder.compile(jit_compile=True)
+
     def text_to_image(
         self,
         prompt,
@@ -125,7 +155,9 @@ class StableDiffusion:
             raise ValueError(
                 f"Prompt is too long (should be <= {MAX_PROMPT_LENGTH} tokens)"
             )
-        phrase = inputs + [49407] * (MAX_PROMPT_LENGTH - len(inputs))
+        phrase = inputs + [self.tokenizer.start_of_text] * (
+            MAX_PROMPT_LENGTH - len(inputs)
+        )
         phrase = tf.convert_to_tensor([phrase], dtype=tf.int32)
 
         # Encode prompt tokens + positions into a "context" vector
